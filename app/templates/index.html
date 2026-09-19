@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Городской помощник · Обращения</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <main>
+    <header><span class="eyebrow">ГОРОДСКИЕ СЛУЖБЫ / PHASE 1</span><span class="pill">Mock analysis</span></header>
+    <h1>Обращение → понятная карточка</h1>
+    <p class="intro">Категория, признаки и объяснимый приоритет для оператора.</p>
+    <div class="notice">Демонстрационный режим: анализ по ограниченным текстовым шаблонам. Правила приоритета — demo rules, не нормативы городской службы.</div>
+    <section class="panel" aria-labelledby="input-title">
+      <h2 id="input-title">Новое обращение</h2>
+      <nav class="examples" aria-label="Демо-примеры">
+        {% for example in examples %}<a href="/?example={{ example.id }}">{{ example.title }}</a>{% endfor %}
+      </nav>
+      <form method="post" action="/analyze">
+        <label for="text">Текст обращения</label>
+        <textarea id="text" name="text" rows="5" maxlength="5000" aria-describedby="input-help{% if error %} error{% endif %}" {% if error %}aria-invalid="true"{% endif %} placeholder="Опишите проблему, место и длительность…">{{ text }}</textarea>
+        <p id="input-help" class="muted">До 5 000 символов. Примеры выше заполняют поле; нажмите Analyze для расчёта.</p>
+        {% if error %}<p id="error" class="error" role="alert">{{ error }}</p>{% endif %}
+        <button type="submit">Analyze — проанализировать</button>
+      </form>
+    </section>
+    {% if card %}
+    <section class="panel result" aria-labelledby="result-title">
+      <div class="result-header"><div><span class="eyebrow">OPERATOR CARD</span><h2 id="result-title">{{ card.analysis.category.value }}</h2></div>
+        {% if card.scoring.priority %}<span class="priority {{ card.scoring.priority|lower }}">{{ card.scoring.priority }}</span>{% else %}<span class="priority">Требует проверки</span>{% endif %}
+      </div>
+      <p class="summary">{{ card.analysis.summary }}</p>
+      <p class="muted">Место: {{ card.analysis.location or 'Не указано / не распознано mock' }}</p>
+      <div class="score"><strong>{{ card.scoring.score if card.scoring.score is not none else '—' }}</strong><span>score / 100<br>LOW 0–29 · MEDIUM 30–59 · HIGH 60+</span></div>
+      {% if card.scoring.unresolved %}<p class="error">Итог не рассчитан. Подтверждённый subtotal: {{ card.scoring.subtotal }}. Неизвестные признаки: {{ card.scoring.unresolved|join(', ') }}.</p>{% endif %}
+      <h3>Reasons — что добавило баллы</h3>
+      {% for reason in card.scoring.reasons %}
+      <div class="reason"><div><strong>{{ reason.label }}</strong>{% for evidence in reason.evidence_or_ids %}<blockquote>{{ evidence }}</blockquote>{% endfor %}</div><b>+{{ reason.points }}</b></div>
+      {% else %}<p>Условия начисления не выявлены.</p>{% endfor %}
+      <p class="notice">Поиск дублей отключён в Phase 1. Вклад дублей принят равным 0; это не означает, что дублей нет. Результат рассчитан только в рамках этого этапа.</p>
+      <details><summary>Структурированный анализ</summary><pre>{{ card.analysis.model_dump(mode='json')|tojson(indent=2) }}</pre></details>
+      <details><summary>Исходное обращение</summary><p class="source">{{ card.text }}</p></details>
+      <ul class="muted">{% for reason in card.analysis.review_reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
+    </section>
+    {% endif %}
+    <footer>Без сохранения данных · Без реального AI · Оператор проверяет основания. Подтверждение дублей появится на следующем этапе.</footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,6 @@
+-c requirements.lock.txt
+fastapi
+pydantic
+jinja2
+uvicorn
+python-multipart

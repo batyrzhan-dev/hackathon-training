@@ -1,6 +1,10 @@
 # CASE — AI-помощник городского оператора
 
-Статус: review одобрен с уточнениями; решения ниже зафиксированы по итогам review. Этапы CASE → VALUE → WOW → MVP → ARCH → SCORE подготовлены; BUILD и DEMO не начаты. Все функции ниже — проектируемые, не реализованные.
+Статус: review завершён, разрешён BUILD только Phase 1. Реализована и проверена минимальная цепочка с mock AI; целевой MVP ниже остаётся планом следующих этапов. Реальный AI, duplicate detection, SQLite и deployment в Phase 1 исключены.
+
+### Phase 1 — явное ограничение текущей реализации
+
+Текст → FastAPI/Pydantic validation → mock AIAnalysis → deterministic scoring → одна Jinja2 operator card. Mock не возвращает score/priority; все четыре правила находятся в общем Python engine. Правило дублей unit-тестируется, но UI/API используют явно обозначенный count=0, поскольку detection отключён. Это временная граница Phase 1, а не заключение об отсутствии дублей; настоящий probable_duplicate_count остаётся неизвестным. Human confirmation и сохранение ещё не реализованы. README содержит актуальный запуск и ограничения.
 
 ## 1. Original task
 
@@ -175,7 +179,7 @@ AI API-ключ хранится только на backend. После подт�
 
 ## 13. Stack
 
-Предложение для review, зависимости не установлены и совместимость не проверена:
+Целевой стек; Phase 1 использует FastAPI/Pydantic/Jinja2 с mock. Точные установленные версии и проверенный запуск перечисляются в README и requirements.lock.txt:
 
 - Backend: Python + FastAPI; валидация структурированного ответа — Pydantic.
 - Frontend: серверные HTML-шаблоны Jinja2 и небольшой JavaScript для одной карточки.
@@ -239,7 +243,7 @@ AI API-ключ хранится только на backend. После подт�
 Фактически использованы: исходный кейс пользователя, существующие AGENTS.md и docs/HACKATHON_PLAYBOOK.txt; документы подготовлены с AI-помощью Codex.
 
 Models: продуктовые модели не выбраны и не подключены.
-Libraries: FastAPI, Pydantic, Jinja2 предложены; не установлены, версии и лицензии предстоит зафиксировать.
+Libraries: Phase 1 использует FastAPI, Pydantic, Jinja2, Uvicorn и python-multipart; тесты — pytest/HTTPX. Версии в requirements.lock.txt, сведения об источниках и лицензиях — README.
 Datasets: внешние не использованы; синтетические примеры предложены в разделе 15.
 Templates: структура документов взята из локального playbook; внешние UI-шаблоны не использованы.
-Pre-existing code: application code не добавлялся; исходные инструкции существовали до этой работы.
+Pre-existing code: исходные инструкции существовали до этой работы; application code Phase 1 написан в рамках текущей тренировки с AI-помощью Codex.

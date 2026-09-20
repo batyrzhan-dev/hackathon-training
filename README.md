@@ -156,6 +156,40 @@ Phase 2: новый provider test suite использует только httpx.
 
 Историческая проверка интеграции до UX-доработки: 142 tests passed (61 исходный + 81 новый), 2 прежних deprecation warnings Starlette TestClient. pip check и git diff --check — без ошибок. Живой mock HTTP flow проверен: 50/MEDIUM, evidence, пустой ввод 422. Реальный manual OpenRouter test пропущен: OPENROUTER_API_KEY отсутствует в environment; реальных запросов не было. Новый браузерный прогон Phase 2 не выполнен: автоматическая проверка разрешений отклонила запуск Chrome из-за лимита использования. HTML/API и UI-содержимое проверены тестами и HTTP.
 
+## Подготовка к раннему deployment на Render
+
+Проект подготовлен для Python Web Service; сам deployment ещё не выполнен. Root Directory — корень репозитория (поле можно оставить пустым). Файл .python-version содержит 3.12; не задавайте конфликтующий PYTHON_VERSION в настройках сервиса.
+
+**Build Command**
+
+```bash
+pip install -r requirements.txt
+```
+
+**Start Command**
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+**Health Check Path:** /health. GET /health возвращает HTTP 200 и {"status":"ok"}. Это проверка работоспособности приложения, не доступности OpenRouter: она не вызывает AI и не требует API key.
+
+Environment variables задать в Render Dashboard:
+
+| Name | Value |
+|---|---|
+| AI_PROVIDER | openrouter |
+| OPENROUTER_API_KEY | Реальный ключ, вводится только в Environment сервиса |
+| OPENROUTER_MODEL | openrouter/free |
+
+PORT предоставляет Render; start command использует его значение. Не копировать .env в репозиторий: файл остаётся ignored, ключ в README/исходниках не хранится. .env.example — только пример без секрета.
+
+Production dependencies уже перечислены в requirements.txt: FastAPI, Pydantic, Jinja2, Uvicorn, python-multipart, HTTPX. requirements.lock.txt используется как constraints; наличие там pytest не устанавливает его при production build. requirements-dev.txt нужен только для тестов.
+
+Для текущего временного хранилища карточек использовать один instance и один worker; если WEB_CONCURRENCY задан в environment, установить 1. Рестарт/redeploy очищает карточки и operator overrides — потребуется повторный Analyze. Постоянного хранения, duplicate detection, embeddings и SQLite пока нет.
+
+Официальные инструкции: [Render FastAPI](https://render.com/docs/deploy-fastapi), [Python version](https://render.com/docs/python-version), [port binding](https://render.com/docs/web-services#port-binding).
+
 ## Deployment / Limitations
 
 Публичного deployment нет. Только локальный запуск, без authentication, roles, embeddings, duplicate detection, SQLite, карт и интеграций. Карточки и scoring-overrides временно хранятся в памяти одного процесса; постоянного хранения и подтверждения дублей нет. В mock режиме результаты синтетические; в openrouter режиме запрос уходит реальному AI. Проверка структуры и вхождения цитат не доказывает смысловую правильность признаков; оператор проверяет результат. Реальную точность/производительность на датасете не оценивали.

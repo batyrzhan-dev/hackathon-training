@@ -48,6 +48,12 @@ def render(request: Request, *, text="", card=None, error=None, status_code=200)
     )
 
 
+@app.get("/health")
+def health():
+    """Liveness only: independent of AI availability and credentials."""
+    return {"status": "ok"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, example: str | None = None):
     text = next((item["text"] for item in EXAMPLES if item["id"] == example), "")

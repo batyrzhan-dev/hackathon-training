@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from .examples import EXAMPLES
-from .duplicates import find_candidates
+from .hybrid_duplicates import match_duplicates
 from .models import AnalyzeRequest, OperatorCard, OperatorChange, ScoringField, FeatureValue, DuplicateChange
 from .operator_review import review_store, recalculate_card
 from .providers import AnalysisError, get_provider, selected_provider_name
@@ -18,7 +18,7 @@ from .scoring import calculate_priority
 logger = logging.getLogger(__name__)
 
 BASE = Path(__file__).resolve().parent
-app = FastAPI(title="Городской помощник · Phase 3")
+app = FastAPI(title="Городской помощник · Phase 4")
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
 templates.env.policies["json.dumps_kwargs"] = {"sort_keys": True, "ensure_ascii": False}
@@ -31,13 +31,16 @@ def build_card(payload: AnalyzeRequest) -> OperatorCard:
         analysis.validate_evidence(payload.text)
     except ValueError:
         raise AnalysisError("invalid_response") from None
-    candidates = find_candidates(payload.text, analysis)
+    matching = match_duplicates(payload.text, analysis)
+    candidates = matching.candidates
     scoring = calculate_priority(analysis, probable_duplicate_count=len(candidates))
     status = "mock_complete" if provider.name == "mock" else "real_complete"
     return review_store.add(recalculate_card(OperatorCard(
         text=payload.text, analysis=analysis, scoring=scoring, candidates=candidates,
         analysis_status="needs_review" if scoring.unresolved else status,
         analysis_provider=provider.name, analysis_model=provider.model,
+        semantic_matching_status=matching.status, semantic_error=matching.error,
+        embedding_model=matching.model,
     )))
 
 

@@ -8,7 +8,7 @@
 </head>
 <body>
   <main>
-    <header><span class="eyebrow">ГОРОДСКИЕ СЛУЖБЫ / PHASE 3</span><span class="pill">{{ "OpenRouter" if provider_name == "openrouter" else "Mock analysis" if provider_name == "mock" else "Provider не настроен" }}</span></header>
+    <header><span class="eyebrow">ГОРОДСКИЕ СЛУЖБЫ / PHASE 4</span><span class="pill">{{ "OpenRouter" if provider_name == "openrouter" else "Mock analysis" if provider_name == "mock" else "Provider не настроен" }}</span></header>
     <h1>Обращение → понятная карточка</h1>
     <p class="intro">Категория, признаки и объяснимый приоритет для оператора.</p>
     <div class="notice">{% if provider_name == "openrouter" %}Режим OpenRouter: текст отправляется реальному AI после нажатия Analyze. Ответ проходит проверку структуры и цитат.{% elif provider_name == "mock" %}Демонстрационный режим: анализ по ограниченным текстовым шаблонам.{% else %}Настройте AI_PROVIDER на сервере.{% endif %} Правила приоритета — demo rules, не нормативы городской службы.</div>
@@ -69,6 +69,15 @@
     </section>
     <section class="panel" aria-labelledby="duplicates-title">
       <h2 id="duplicates-title">Похожие обращения</h2>
+      {% if card.semantic_matching_status == 'fallback' %}
+      <p class="notice" role="status">Semantic matching temporarily unavailable. Used lexical fallback.<br>Семантический поиск недоступен; использован lexical matcher. Причина: {{ card.semantic_error }}.</p>
+      {% elif card.semantic_matching_status == 'complete' %}
+      <p class="muted">Hybrid matching · Embeddings: {{ card.embedding_model }}</p>
+      {% elif card.semantic_matching_status == 'mock' %}
+      <p class="notice">Mock embeddings — синтетические векторы, не реальный семантический AI.</p>
+      {% elif card.semantic_matching_status == 'not_needed' %}
+      <p class="muted">Embeddings не запрашивались: нет записей, прошедших проверки категории, адреса и проблемы.</p>
+      {% else %}<p class="muted">Семантический поиск отключён. Использован lexical matcher.</p>{% endif %}
       <p><strong>Найдено вероятных дублей: {{ card.probable_duplicate_count }}</strong></p>
       <p class="muted">Поиск по синтетической истории из репозитория. Similarity — техническая похожесть 0–100, не вероятность. Алгоритм предлагает кандидатов; оператор подтверждает или отклоняет. Обращения не объединяются.</p>
       {% for candidate in card.candidates %}
@@ -76,7 +85,8 @@
         <h3>#{{ candidate.id }} · {{ candidate.category.value }}</h3>
         <p class="muted">{{ candidate.location }}</p>
         <p>{{ candidate.text }}</p>
-        <p><strong>Similarity: {{ candidate.similarity }}/100</strong> · текст: {{ candidate.text_similarity }}/100</p>
+        <p><strong>Similarity: {{ candidate.similarity }}/100</strong> <br>Lexical: {{ candidate.text_similarity }}/100 · Semantic: {{ (candidate.semantic_similarity|string + '/100') if candidate.semantic_similarity is not none else 'не рассчитан' }}
+        <br><span class="muted">Основание отбора: {{ 'hybrid' if candidate.matching_method == 'hybrid' else 'lexical (правило Phase 3)' }}</span></p>
         <ul>{% for reason in candidate.reasons %}<li>✓ {{ reason }}</li>{% endfor %}</ul>
         <p>Статус: <strong>{{ candidate.status }}</strong> · {{ 'Исключён из подсчёта' if candidate.status == 'rejected' else 'Учтён как вероятный дубль' }}</p>
         <form method="post" action="/cards/{{ card.card_id }}/duplicates/{{ candidate.id }}">

@@ -6,6 +6,10 @@ import pytest
 def isolated_ai_environment(monkeypatch):
     """Old mock tests remain deterministic even on a real-key developer machine."""
     monkeypatch.setenv("AI_PROVIDER", "mock")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "disabled")
+    monkeypatch.delenv("OPENROUTER_EMBEDDING_MODEL", raising=False)
+    from app.embeddings.cache import history_cache
+    history_cache.clear()
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
 

@@ -1,8 +1,14 @@
 # PLAN — CASE → VALUE → WOW → MVP → ARCH → SCORE
 
-Статус: Phase 1–2 завершены; текущий этап — Phase 3 (детерминированные кандидаты на дубликаты). Остановка на review, без commit/push.
+Статус: Phase 1–3 завершены. Текущий этап — только Phase 4: hybrid semantic duplicate detection. Без commit/push/deployment; остановка на review.
 
-## Phase 3 — текущая реализация и границы
+## Phase 4 — актуальное решение
+
+Добавлен отдельный EmbeddingProvider (OpenRouter/mock), без смешивания с analysis provider. Free model: nvidia/nemotron-3-embed-1b:free; slug подтверждён официальным каталогом. Category/location и проверки проблемы остаются gates. После них hybrid_text=0.25×lexical+0.75×semantic, Similarity=60+0.4×hybrid_text. Дополнительный кандидат требует semantic≥80 и Similarity≥86; прежние lexical кандидаты сохраняются. Формулы, source links, конфигурация и ограничения подробно указаны в README.
+
+Исторические векторы имеют bounded in-memory cache; отказ embeddings явно включает lexical fallback. Scoring и human-in-the-loop не меняются, auto-merge нет. SQLite, auth, карты и последующие этапы не начаты. Проверка: 275 тестов; real manual embedding test пропущен из-за отсутствия ключа в environment, качество реальной модели не заявляется. Подробности прежних этапов ниже исторические; актуальная граница — Phase 4.
+
+## История Phase 3 — реализация и границы на момент этапа
 
 Разрешён и реализован только lightweight deterministic поиск кандидатов. Ранний Render deployment предыдущего этапа работает по сообщению пользователя; изменения Phase 3 ещё не опубликованы. Никаких embeddings, дополнительных LLM calls, SQLite, auth, ролей, карт и следующих этапов.
 
@@ -172,3 +178,7 @@ Endpoints: POST /cards/{card_id}/features для формы и PATCH /api/cards/
 ### Проверка Phase 3
 
 Полный pytest: **211 passed**, два прежних deprecation warnings Starlette TestClient. Основной сценарий проверен через живой Uvicorn/HTTP в отдельном production-only окружении Python 3.12: HTML Analyze → четыре кандидата / 70 HIGH; два Reject → два / 50 MEDIUM; Confirm → три / 70 HIGH; unknown → subtotal 70 без итогового priority. Проверены /health, CSS и сохранение исходного текста. Runtime использовал mock; дополнительных реальных OpenRouter calls не было. Временный сервер остановлен. git diff --check пройден. Остановка на review; следующие этапы, commit, push и публикация Phase 3 не выполнялись.
+
+### Runtime-проверка Phase 4
+
+На живом Uvicorn в production-only окружении Python 3.12 проверены два режима: mock embeddings и OpenRouter без ключа (явный lexical fallback до сетевого вызова). В обоих HTML/API показывают четыре кандидата и 70/HIGH; после двух reject — два кандидата и 50/MEDIUM. Проверены /health, подписи Lexical/Semantic, Mock embeddings и сообщение fallback. Оба временных сервера остановлены. Реальный embedding inference не выполнялся. git diff --check пройден, .env остаётся ignored, runtime dependencies не менялись. Остановка на review: без commit, push и deployment.

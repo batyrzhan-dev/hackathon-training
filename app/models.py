@@ -96,6 +96,8 @@ class HistoricalReport(Contract):
 class DuplicateCandidate(HistoricalReport):
     similarity: float = Field(ge=0, le=100)
     text_similarity: float = Field(ge=0, le=100)
+    semantic_similarity: float | None = Field(default=None, ge=0, le=100)
+    matching_method: Literal["lexical", "hybrid"] = "lexical"
     reasons: list[str]
     status: Literal["pending", "confirmed", "rejected"] = "pending"
 
@@ -115,6 +117,9 @@ class OperatorCard(Contract):
     candidates: list[DuplicateCandidate] = Field(default_factory=list)
     analysis_provider: Literal["mock", "openrouter"] = "mock"
     analysis_model: str | None = None
+    semantic_matching_status: Literal["disabled", "complete", "mock", "fallback", "not_needed"] = "disabled"
+    semantic_error: str | None = None
+    embedding_model: str | None = None
 
     card_id: str | None = None
     operator_overrides: dict[ScoringField, FeatureValue] = Field(default_factory=dict)

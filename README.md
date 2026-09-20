@@ -1,6 +1,62 @@
-# Городской помощник — Phase 3: кандидаты на дубликаты
+# Городской помощник — Phase 4: hybrid semantic matching
 
-End-to-end прототип: текст → mock или OpenRouter → validated AIAnalysis → deterministic duplicate matching → существующий scoring → карточка → решение оператора. Phase 3 добавляет кандидатов на дубликаты и confirm/reject. Embeddings, SQLite и следующие этапы не реализованы. Ранний deployment на Render работает по сообщению пользователя; текущие изменения ещё не опубликованы.
+End-to-end прототип: текст → mock/OpenRouter extraction → validated AIAnalysis → lexical/hybrid duplicate matching → deterministic scoring → карточка → решение оператора. Phase 1–3 завершены; приложение работает на Render по сообщению пользователя. Текущая Phase 4 не публикуется.
+
+## Phase 4 — Hybrid semantic matching
+
+AI extraction через прежний AnalysisProvider превращает свободный текст в category, место, признаки и точные цитаты. Отдельный EmbeddingProvider превращает тексты в векторы для сравнения разных формулировок. Embeddings не извлекают score, не заменяют category/location gates и не принимают решения оператора. Scoring остаётся прежним Python engine: 3+ pending/confirmed кандидата → +20; rejected исключается; unknown блокирует final priority.
+
+Модель по умолчанию: **nvidia/nemotron-3-embed-1b:free**. Проверена 20 сентября 2026 в [официальном каталоге embedding-моделей](https://openrouter.ai/api/v1/embeddings/models): slug присутствует, prompt/completion price = 0. [Карточка модели](https://openrouter.ai/nvidia/nemotron-3-embed-1b:free). Это проверка каталога, не успешного inference. Adapter использует [официальный POST /api/v1/embeddings](https://openrouter.ai/docs/api/api-reference/embeddings/create-embeddings).
+
+### Конфигурация и запуск
+
+Существующие AI_PROVIDER, OPENROUTER_API_KEY и OPENROUTER_MODEL остаются прежними. Для реального hybrid поиска задать:
+
+```bash
+EMBEDDING_PROVIDER=openrouter
+OPENROUTER_EMBEDDING_MODEL=nvidia/nemotron-3-embed-1b:free
+```
+
+Ключ общий с analysis provider, только из environment. Если EMBEDDING_PROVIDER не задан, значение по умолчанию disabled: приложение продолжает lexical поиск без новых сетевых вызовов. Допустимы disabled/openrouter/mock. OPENROUTER_EMBEDDING_MODEL конфигурируется в factory; при отсутствии используется указанный free slug, пустое значение считается ошибкой конфигурации. Для этого этапа разрешены только slugs с :free; платная модель не подставляется. Указанный недоступный slug приводит к явному lexical fallback, а не к другой embedding-модели.
+
+Реальный режим (ключ уже экспортирован):
+
+```bash
+AI_PROVIDER=openrouter OPENROUTER_MODEL=openrouter/free EMBEDDING_PROVIDER=openrouter OPENROUTER_EMBEDDING_MODEL=nvidia/nemotron-3-embed-1b:free .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+
+Локальная проверка без сети: AI_PROVIDER=mock EMBEDDING_PROVIDER=mock с прежней командой Uvicorn. MockEmbeddingProvider использует синтетические hash-векторы, либо заданные векторы в тестах; он **не является семантической моделью**. UI явно подписывает Mock embeddings. Для прежнего Phase 3 flow использовать EMBEDDING_PROVIDER=disabled. .env.example не содержит секретов; .env не читается автоматически и остаётся ignored.
+
+### Формула и thresholds
+
+Сначала обязательны одинаковая category (кроме «Другое») и распознанный одинаковый нормализованный адрес, включая дом/букву/корпус. Сохранены проверки починенного освещения и различия внутренней лампы/уличного фонаря. Общие gates вынесены из matcher без удаления прежнего lexical пути; в словарь неисправности добавлено «сломан» для указанного пользователем примера.
+
+L — прежний lexical text score 0–100. S = 100 × max(0, cosine(query, history)); отрицательный cosine обрезается до 0. Векторы проверяются на конечные числа, одинаковую размерность и ненулевую норму.
+
+```text
+hybrid_text = 0.25 × L + 0.75 × S
+Similarity = 20 (category) + 40 (location) + 0.40 × hybrid_text
+```
+
+Константы app/hybrid_duplicates.py: LEXICAL_WEIGHT=0.25, SEMANTIC_WEIGHT=0.75, SEMANTIC_THRESHOLD=80, HYBRID_TEXT_THRESHOLD=65, HYBRID_THRESHOLD=86. Новый семантический кандидат требует S≥80 И Similarity≥86, что эквивалентно hybrid_text≥65 после прохождения gates. Например L=40, S=99 → hybrid_text=84.25, Similarity=93.7.
+
+**Прежние lexical кандидаты сохраняются**, даже если semantic score низкий: правило Phase 3 L≥50 / lexical Similarity≥80 продолжает работать независимо. В hybrid режиме общий показанный score считается формулой выше; основание отбора lexical/hybrid указано отдельно, поэтому lexical кандидат может иметь hybrid score ниже 86. При отключении/ошибке embeddings score возвращается к исходной Phase 3 формуле 60+0.4L. Пороги — явные demo-допущения, не калиброванные на реальных данных. Similarity и cosine — техническая близость, **не probability**.
+
+### Cache, ошибки и UI
+
+История кэшируется лениво в памяти процесса (LRU, максимум 128 векторов). Ключ: provider name + model + report ID + SHA256 исходного текста. Изменение модели/текста не использует старый вектор. Кэшируются только прошедшие gates исторические записи; пользовательские запросы не кэшируются. Первый запрос отправляет один batch: новый текст + отсутствующие исторические тексты. Далее — новый текст и только недостающая история. Lock предотвращает повторную загрузку истории конкурентными запросами; ожидание сетевого вызова сериализует обращения к этому cache. При restart всё пересоздаётся. Нет Redis/SQLite, файловых записей или локальных ML-моделей; dependencies не изменились.
+
+Timeout: connect 5 секунд, read/write/pool 15 секунд (таймауты HTTPX, не общий SLA). Нет retry, redirects, model/provider fallback; allow_fallbacks=false. Missing key, invalid configuration, timeout, 429, network/API error, пустой JSON, повреждённые векторы → прежний lexical matcher. UI показывает «Semantic matching temporarily unavailable. Used lexical fallback.» и безопасную причину; Semantic = не рассчитан. Сырые responses/headers, текст исключений и ключ не выводятся. Невалидные/частичные batches не попадают в cache.
+
+В API добавлены semantic_matching_status (disabled/complete/mock/fallback/not_needed), semantic_error и embedding_model. Каждый кандидат дополняется semantic_similarity|null и matching_method; прежний text_similarity — это Lexical. Not_needed означает, что gates не пропустили ни одной записи, embeddings не вызывались. UI показывает Similarity, Lexical, Semantic и основания. Confirm/reject и feature override сохраняют результат поиска и повторно запускают только scoring, без новых AI/embedding requests. Обращения не объединяются.
+
+### Проверки и ограничения Phase 4
+
+Полный pytest: **275 passed**, два прежних deprecation warnings. Все 211 проверок Phase 1–3 проходят. Новые проверки используют MockTransport/заданные векторы: validation, ошибочные ответы, timeout, отсутствие ключа, отсутствие paid fallback, cache по модели/тексту, concurrent fill, category/address guards, low-lexical paraphrase, fallback, UI и пересчёт оператора.
+
+Real manual embedding check **не выполнялся**: OPENROUTER_API_KEY отсутствует в environment процесса. .env для этой проверки не загружался. Высокая similarity русских перефразировок у настоящей модели не подтверждена; mock-векторы проверяют алгоритм, а не качество модели. Пример пользователя после нормализации уже имеет высокий lexical score, поэтому отдельный тест использует пару с lexical<50, чтобы проверить именно добавление semantic-кандидата.
+
+Адресный парсер и словарь неисправностей остаются ограниченными; могут быть пропуски синонимов и ошибки внутри одного дома. Нужны реальные замеры и калибровка порогов; бесплатный API может ограничивать скорость/доступность. История из 12 синтетических записей не пополняется, решения остаются в памяти карточек. Phase 4 не публикуется; БД, auth, роли, карты и следующие этапы не начаты.
 
 ## Problem / Target users / Value
 
@@ -47,7 +103,7 @@ Real AI не подменяет отсутствие сведений значе
 
 Каждый вклад начисляется один раз. 0–29 LOW; 30–59 MEDIUM; 60+ HIGH. Причины включают только сработавшие правила.
 
-**Phase 3:** backend считает уникальные ID pending/confirmed кандидатов. Rejected не участвуют. API возвращает duplicate_detection_status=complete, probable_duplicate_count и duplicate_count_for_scoring с фактическим числом найденных активных кандидатов. Клиент не может прислать собственный count/score. Reasons для +20 содержат ID кандидатов.
+**Phase 3–4:** backend считает уникальные ID pending/confirmed кандидатов. Rejected не участвуют. API возвращает duplicate_detection_status=complete, probable_duplicate_count и duplicate_count_for_scoring с фактическим числом найденных активных кандидатов. Клиент не может прислать собственный count/score. Reasons для +20 содержат ID кандидатов.
 
 При неизвестном scoring-признаке engine возвращает score/priority=null, subtotal известных вкладов и unresolved. Поиск кандидатов не превращает unknown в no. Если AI вернул critical_outage=unknown, оператор сначала проверяет этот признак; до решения итогового HIGH/MEDIUM/LOW нет.
 
@@ -60,7 +116,7 @@ HTML form / JSON API
     → AnalyzeRequest validation
     → AnalysisProvider (mock / OpenRouter)
     → AIAnalysis + evidence validation
-    → duplicates.find_candidates (синтетическая история)
+    → hybrid_duplicates.match_duplicates (gates + lexical + optional embeddings)
     → scoring.calculate_priority
     → OperatorCard → Jinja2 HTML / JSON
     → confirm/reject или feature override → повторный scoring
@@ -69,7 +125,9 @@ HTML form / JSON API
 - app/models.py — контракты.
 - app/mock_ai.py — сохранённый mock; app/providers/ — общий интерфейс, factory, adapters, prompt и безопасные ошибки.
 - app/scoring.py — независимый engine всех четырёх правил.
-- app/duplicates.py и app/data/reports.json — deterministic matching и история.
+- app/duplicates.py и app/data/reports.json — прежний deterministic matching и история.
+- app/embeddings/ — отдельный provider interface, OpenRouter/mock adapters и cache.
+- app/hybrid_duplicates.py — hybrid orchestration и lexical fallback.
 - app/operator_review.py — временные решения оператора и общий пересчёт.
 - app/main.py — общая сборка карточки для формы и API.
 - app/examples.py — синтетические тексты.
@@ -108,6 +166,8 @@ AI_PROVIDER=openrouter OPENROUTER_MODEL=openrouter/free .venv/bin/python -m uvic
 | AI_PROVIDER | mock (default) либо openrouter |
 | OPENROUTER_API_KEY | Секрет из environment, требуется только для openrouter |
 | OPENROUTER_MODEL | Требуется для openrouter; для этой тренировки openrouter/free |
+| EMBEDDING_PROVIDER | disabled (default), openrouter или mock |
+| OPENROUTER_EMBEDDING_MODEL | nvidia/nemotron-3-embed-1b:free (default); отдельная embedding-модель |
 
 .env.example содержит пустое поле ключа, без секретов. .env и локальные .env.* исключены из Git, .env.example разрешён. Приложение **не читает .env автоматически**: либо экспортировать переменные штатным способом, либо создать локальный .env из примера, заполнить его в редакторе и загрузить перед запуском:
 
@@ -164,7 +224,7 @@ Phase 2: новый provider test suite использует только httpx.
 
 ## Подготовка к раннему deployment на Render
 
-Ранний deployment Phase 2 работает по сообщению пользователя; Phase 3 в этом задании не публикуется. Настройки Python Web Service: Root Directory — корень репозитория (поле можно оставить пустым). Файл .python-version содержит 3.12; не задавайте конфликтующий PYTHON_VERSION в настройках сервиса.
+Приложение Phase 1–3 работает на Render по сообщению пользователя; Phase 4 в этом задании не публикуется. Настройки Python Web Service: Root Directory — корень репозитория (поле можно оставить пустым). Файл .python-version содержит 3.12; не задавайте конфликтующий PYTHON_VERSION в настройках сервиса.
 
 **Build Command**
 
@@ -192,24 +252,25 @@ PORT предоставляет Render; start command использует ег�
 
 Production dependencies уже перечислены в requirements.txt: FastAPI, Pydantic, Jinja2, Uvicorn, python-multipart, HTTPX. requirements.lock.txt используется как constraints; наличие там pytest не устанавливает его при production build. requirements-dev.txt нужен только для тестов.
 
-Для текущего временного хранилища карточек использовать один instance и один worker; если WEB_CONCURRENCY задан в environment, установить 1. Рестарт/redeploy очищает карточки и operator overrides — потребуется повторный Analyze. Постоянного хранения, embeddings и SQLite пока нет. История read-only входит в репозиторий; filesystem writes не нужны.
+Для текущего временного хранилища карточек использовать один instance и один worker; если WEB_CONCURRENCY задан в environment, установить 1. Рестарт/redeploy очищает карточки и operator overrides — потребуется повторный Analyze. Постоянного хранения и SQLite пока нет. История read-only входит в репозиторий; filesystem writes не нужны.
 
 Официальные инструкции: [Render FastAPI](https://render.com/docs/deploy-fastapi), [Python version](https://render.com/docs/python-version), [port binding](https://render.com/docs/web-services#port-binding).
 
 ## Deployment / Limitations
 
-Ранний Render deployment подтверждён пользователем; URL не предоставлен, повторная публичная проверка здесь не выполнялась. Без authentication, roles, embeddings, SQLite, карт и интеграций. Карточки, scoring overrides и решения по дубликатам временно хранятся в памяти одного процесса; постоянного хранения нет. В mock режиме результаты синтетические; в openrouter режиме запрос уходит реальному AI. Проверка структуры и вхождения цитат не доказывает смысловую правильность признаков; оператор проверяет результат. Реальную точность/производительность на датасете не оценивали.
+Ранний Render deployment подтверждён пользователем; URL не предоставлен, повторная публичная проверка здесь не выполнялась. Без authentication, roles, SQLite, карт и production-интеграций. Карточки, scoring overrides и решения по дубликатам временно хранятся в памяти одного процесса; постоянного хранения нет. В mock режиме результаты синтетические; в openrouter режиме запрос уходит реальному AI. Проверка структуры и вхождения цитат не доказывает смысловую правильность признаков; оператор проверяет результат. Реальную точность/производительность на датасете не оценивали.
 
 ## External materials
 
 - Исходные AGENTS.md и docs/HACKATHON_PLAYBOOK.txt существовали до реализации; требования и CASE/PLAN предоставлены/одобрены пользователем.
 - Код, HTML/CSS, тесты и синтетические примеры подготовлены с AI-помощью Codex; внешние UI-шаблоны/датасеты не использованы.
 - Прямые зависимости: FastAPI (MIT), Pydantic (MIT), Jinja2 (BSD-3-Clause), Uvicorn (BSD-3-Clause), python-multipart (Apache-2.0); HTTP-клиент: HTTPX (BSD-3-Clause); тесты: pytest (MIT). Источники — одноимённые пакеты PyPI; точные установленные версии, включая транзитивные, в requirements.lock.txt.
+- Embedding-модель Phase 4: NVIDIA Nemotron 3 Embed 1B (free), nvidia/nemotron-3-embed-1b:free, через OpenRouter; weights локально не загружаются. Источники и факт проверки каталога — раздел Phase 4.
 - Добавлен OpenRouter adapter. Запрашиваемая модель задаётся OPENROUTER_MODEL; для тренировки — openrouter/free. Факт успешного живого вызова указывается отдельно от unit-тестов с mock HTTP.
 
 ## Future development / Project documents
 
-CASE.md и PLAN.md отделяют текущую Phase 3 от более широкого целевого MVP. Следующие этапы требуют отдельного запроса: embeddings, постоянная история, улучшение качества и дальнейший deployment. Текущая остановка — review после Phase 3. Commit и push не выполняются.
+CASE.md и PLAN.md отделяют текущую Phase 4 от более широкого целевого MVP. Следующие этапы требуют отдельного запроса: постоянная история, улучшение качества и дальнейший deployment. Текущая остановка — review после Phase 4. Commit и push не выполняются.
 
 ### Исправление обрезанного ответа OpenRouter
 
@@ -233,7 +294,7 @@ Endpoints: POST /cards/{card_id}/features для формы и PATCH /api/cards/
 
 Проверка: полный pytest — 168 passed, два прежних deprecation warnings TestClient. Chrome подтвердил автоматический пересчёт 50/MEDIUM ↔ 80/HIGH ↔ unknown, mapping длительности, сохранность AI, маркеры override и мобильную ширину. За сценарий выполнен только один Analyze. Остановлено на review, commit/push не выполнялись.
 
-## Phase 3 — текущая реализация и границы
+## История Phase 3 — реализация и границы на момент этапа
 
 Разрешён и реализован только lightweight deterministic поиск кандидатов. Ранний Render deployment предыдущего этапа работает по сообщению пользователя; изменения Phase 3 ещё не опубликованы. Никаких embeddings, дополнительных LLM calls, SQLite, auth, ролей, карт и следующих этапов.
 
@@ -256,3 +317,7 @@ Dataset создан синтетически с помощью Codex для э�
 ### Проверка Phase 3
 
 Полный pytest: **211 passed**, два прежних deprecation warnings Starlette TestClient. Основной сценарий проверен через живой Uvicorn/HTTP в отдельном production-only окружении Python 3.12: HTML Analyze → четыре кандидата / 70 HIGH; два Reject → два / 50 MEDIUM; Confirm → три / 70 HIGH; unknown → subtotal 70 без итогового priority. Проверены /health, CSS и сохранение исходного текста. Runtime использовал mock; дополнительных реальных OpenRouter calls не было. Временный сервер остановлен. git diff --check пройден. Остановка на review; следующие этапы, commit, push и публикация Phase 3 не выполнялись.
+
+### Runtime-проверка Phase 4
+
+На живом Uvicorn в production-only окружении Python 3.12 проверены два режима: mock embeddings и OpenRouter без ключа (явный lexical fallback до сетевого вызова). В обоих HTML/API показывают четыре кандидата и 70/HIGH; после двух reject — два кандидата и 50/MEDIUM. Проверены /health, подписи Lexical/Semantic, Mock embeddings и сообщение fallback. Оба временных сервера остановлены. Реальный embedding inference не выполнялся. git diff --check пройден, .env остаётся ignored, runtime dependencies не менялись. Остановка на review: без commit, push и deployment.

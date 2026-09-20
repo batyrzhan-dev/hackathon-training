@@ -1,10 +1,20 @@
 # CASE — AI-помощник городского оператора
 
-Статус: review завершён, разрешён BUILD только Phase 1. Реализована и проверена минимальная цепочка с mock AI; целевой MVP ниже остаётся планом следующих этапов. Реальный AI, duplicate detection, SQLite и deployment в Phase 1 исключены.
+Статус: Phase 1 завершена; разрешена только Phase 2 — Real AI Integration через OpenRouter. Scoring engine сохранён. Duplicate detection, embeddings, SQLite и deployment остаются вне текущего этапа.
 
 ### Phase 1 — явное ограничение текущей реализации
 
 Текст → FastAPI/Pydantic validation → mock AIAnalysis → deterministic scoring → одна Jinja2 operator card. Mock не возвращает score/priority; все четыре правила находятся в общем Python engine. Правило дублей unit-тестируется, но UI/API используют явно обозначенный count=0, поскольку detection отключён. Это временная граница Phase 1, а не заключение об отсутствии дублей; настоящий probable_duplicate_count остаётся неизвестным. Human confirmation и сохранение ещё не реализованы. README содержит актуальный запуск и ограничения.
+
+### Phase 2 — Real AI Integration
+
+Текст → AnalysisProvider (mock/openrouter) → JSON Schema + Pydantic + exact evidence validation → неизменённый scoring engine → существующая operator card. AI не возвращает score/priority. OpenRouter использует только OPENROUTER_MODEL из environment (для тренировки openrouter/free) и OPENROUTER_API_KEY; секреты не входят в документы/Git. Автоматических fallback или retry нет. Ошибки видны оператору, введённый текст сохраняется. Mock остаётся доступен; поиск дублей всё ещё отключён с явно обозначенным вкладом 0.
+
+Контракт real AI требует все поля схемы; unknown не заменяется false, evidence сверяется с исходником без изменения регистра/пробелов. Инструкции внутри обращения — недоверенные DATA. UI показывает источник анализа и все извлечённые evidence, включая unknown/no. Остановка после Phase 2 для review; Phase 3 не начинать.
+
+### Phase 2 — operator overrides
+
+Добавлено ручное подтверждение трёх scoring-признаков с отдельным хранением исходных AI-значений/evidence и operator_overrides. После каждого изменения выполняется прежний deterministic engine; unknown по-прежнему блокирует final priority. Для длительности UI использует «Нет данных» / «Менее двух дней» / «Два дня и более». Карточки временно хранятся в памяти процесса, без БД; детали времени жизни и результаты проверок — README. Duplicate detection и deployment не начинались.
 
 ## 1. Original task
 
@@ -183,11 +193,11 @@ AI API-ключ хранится только на backend. После подт�
 
 - Backend: Python + FastAPI; валидация структурированного ответа — Pydantic.
 - Frontend: серверные HTML-шаблоны Jinja2 и небольшой JavaScript для одной карточки.
-- AI: внешний API текстовой модели со структурированным ответом и embedding-модели; провайдер и точные model ID выбираются после review с учётом доступов, бюджета и качества русского языка.
+- AI: внешний API текстовой модели со структурированным ответом и embedding-модели; для Phase 2 выбран OpenRouter с OPENROUTER_MODEL из environment (openrouter/free в тренировке); embeddings отложены.
 - Storage: SQLite, embeddings в сохранённых записях; cosine similarity в приложении.
 - Deployment: один сервис с persistent disk для SQLite; конкретная площадка пока не выбрана. Проверить ранний deployment после первого вертикального среза.
 
-Это одна из простых реализаций; отсутствие выбранного AI-провайдера — открытая зависимость перед BUILD.
+Phase 2 выбирает OpenRouter; для живого запроса требуется ключ в environment. Модельные ограничения и качество проверяются отдельно от unit-тестов.
 
 ## 14. Error cases
 
@@ -242,8 +252,8 @@ AI API-ключ хранится только на backend. После подт�
 
 Фактически использованы: исходный кейс пользователя, существующие AGENTS.md и docs/HACKATHON_PLAYBOOK.txt; документы подготовлены с AI-помощью Codex.
 
-Models: продуктовые модели не выбраны и не подключены.
-Libraries: Phase 1 использует FastAPI, Pydantic, Jinja2, Uvicorn и python-multipart; тесты — pytest/HTTPX. Версии в requirements.lock.txt, сведения об источниках и лицензиях — README.
+Models: реализован OpenRouter adapter, модель берётся из OPENROUTER_MODEL; конфигурация тренировки — openrouter/free. Реальный сетевой прогон выполняется только при доступном ключе; его статус фиксируется в README.
+Libraries: Phase 1 использует FastAPI, Pydantic, Jinja2, Uvicorn и python-multipart; HTTP-клиент — HTTPX; тесты — pytest. Версии в requirements.lock.txt, сведения об источниках и лицензиях — README.
 Datasets: внешние не использованы; синтетические примеры предложены в разделе 15.
 Templates: структура документов взята из локального playbook; внешние UI-шаблоны не использованы.
 Pre-existing code: исходные инструкции существовали до этой работы; application code Phase 1 написан в рамках текущей тренировки с AI-помощью Codex.

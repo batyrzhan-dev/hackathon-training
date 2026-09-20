@@ -2,7 +2,7 @@
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, computed_field, model_validator
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=5000)]
 
@@ -24,9 +24,12 @@ class AnalyzeRequest(Contract):
     text: Text
 
 
+Quote = Annotated[str, StringConstraints(min_length=1, max_length=5000)]
+
+
 class Feature(Contract):
     value: Literal["yes", "no", "unknown"]
-    evidence: list[Text] = Field(default_factory=list)
+    evidence: list[Quote] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def positive_needs_evidence(self):
@@ -67,12 +70,38 @@ class PriorityResult(Contract):
     unresolved: list[str]
 
 
+ScoringField = Literal["safety_risk", "critical_outage", "persists_multiple_days"]
+FeatureValue = Literal["yes", "no", "unknown"]
+
+
+class OperatorChange(Contract):
+    field: ScoringField
+    value: FeatureValue
+
+
+class OperatorScoringInput(Contract):
+    """Effective features for the engine, not an AI response or source quotes."""
+    safety_risk: Feature
+    critical_outage: Feature
+    persists_multiple_days: Feature
+
+
 class OperatorCard(Contract):
     text: str
     analysis: AIAnalysis
     scoring: PriorityResult
-    analysis_status: Literal["mock_complete", "needs_review"]
+    analysis_status: Literal["mock_complete", "real_complete", "needs_review"]
     duplicate_detection_status: Literal["disabled_phase1"] = "disabled_phase1"
     probable_duplicate_count: int | None = None
     duplicate_count_for_scoring: Literal[0] = 0
-    analysis_provider: Literal["mock"] = "mock"
+    analysis_provider: Literal["mock", "openrouter"] = "mock"
+    analysis_model: str | None = None
+
+    card_id: str | None = None
+    operator_overrides: dict[ScoringField, FeatureValue] = Field(default_factory=dict)
+
+    @computed_field
+    @property
+    def effective_values(self) -> dict[str, str]:
+        return {field: self.operator_overrides.get(field, getattr(self.analysis, field).value)
+                for field in ("safety_risk", "critical_outage", "persists_multiple_days")}

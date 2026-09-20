@@ -1,6 +1,6 @@
 # PLAN — CASE → VALUE → WOW → MVP → ARCH → SCORE
 
-Статус: review завершён; BUILD разрешён только для Phase 1 по новому запросу пользователя. Реальный AI, duplicate detection, SQLite и deployment отложены. Commit и push не разрешены.
+Статус: Phase 1 завершена и зафиксирована. Разрешена только Phase 2 — OpenRouter integration. Duplicate detection, embeddings, SQLite, deployment и Phase 3 не начинать. Commit и push не разрешены.
 
 ## 1. CASE
 
@@ -100,7 +100,7 @@ Human-in-the-loop — важная особенность: AI помогает �
 
 Review одобрен. Зафиксированы основной поток MVP, шесть исключений из scope, демонстрационный scoring, probable duplicate detection с similarity и human-in-the-loop. Необходимые уточнения до реализации: доступный AI API/бюджет, длительность тренировки, площадка deployment; при наличии — официальный регламент приоритетов и отдельные критерии организаторов. Demo scoring не подменяет городской регламент.
 
-Обновлённая точка остановки: после реализации и проверки Phase 1. Новый запрос явно разрешает application code только для минимального vertical slice, сохраняя запрет на commit и push.
+Обновлённая точка остановки: после проверки Phase 2 на review. Разрешены только provider abstraction, OpenRouter, валидация, UI-индикация и соответствующие тесты/документация; запрет на commit/push сохраняется.
 
 При отдельном запросе на реализацию будущий порядок: один вертикальный сценарий со всеми MUST → ранний deployment → проверка качества и ошибок → WOW → README с проверенными командами → репетиция. Каждый час оставлять проверяемые изменения или результаты проверки; commit/push возможны только по отдельному явному запросу.
 
@@ -115,3 +115,39 @@ Engine поддерживает все четыре правила. В Phase 1 d
 Проверка готовности: запустить pytest, затем Uvicorn; проверить живые HTML/API запросы — фонарь 50/MEDIUM, HIGH 80, LOW 0, пустой ввод 422. README должен содержать воспроизводимые команды. После проверки остановиться без перехода к следующим фазам.
 
 Результат проверки Phase 1: 61 тест прошёл; pip check — без конфликтов. Uvicorn запущен локально, HTML/API подтверждают 50/MEDIUM, 40/MEDIUM, 80/HIGH, 0/LOW, unknown без итогового приоритета и пустой ввод 422. Chrome: demo → Analyze → карточка, structured analysis, мобильная ширина и пустой ввод проверены. Два deprecation warnings относятся к зависимостям тестового клиента. Phase 1 завершена; дальнейшие фазы не начинались. Commit/push не выполнялись.
+
+## 9. BUILD — Phase 2: Real AI Integration
+
+Реализована интеграция для цепочки текст → реальный AI → validated structured data → существующий scoring → operator card. Provider interface поддерживает mock и openrouter; main.py не импортирует OpenRouter adapter напрямую. HTTPX перенесён в runtime dependencies; новых библиотек не требуется.
+
+OpenRouter: API endpoint chat/completions; JSON Schema strict, require_parameters=true; model только из OPENROUTER_MODEL. Без paid fallback, замены модели, retry или скрытого перехода на mock. Missing key/model, timeout, rate limit, API/network, empty/malformed, invalid evidence дают безопасные ошибки с сохранением текста. Ключ — только environment, .env игнорируется; .env.example без секретов.
+
+System prompt запрещает следовать инструкциям внутри complaint DATA, придумывать факты и выставлять score/priority. Валидация проверяет enum category, все поля, запрет лишних ключей, точные evidence; unknown сохраняется и блокирует итоговый priority через существующий engine. Operator card показывает provider, summary/category, evidence, score/priority/reasons.
+
+Тесты: исходные 61 сохранены; новые HTTP-ответы мокируются через MockTransport. Autouse fixture изолирует provider environment и блокирует настоящий HTTP. Проверить mock flow на локальном сервере; один живой запрос OpenRouter — только если реальный ключ доступен в environment, иначе честно отметить пропуск. Финальная точка остановки — Phase 2 review.
+
+Phase 2 verification: 142 tests passed (61 исходный + 81 новый), 2 прежних deprecation warnings Starlette TestClient. pip check и git diff --check — без ошибок. Живой mock HTTP flow проверен: 50/MEDIUM, evidence, пустой ввод 422. Реальный manual OpenRouter test пропущен: OPENROUTER_API_KEY отсутствует в environment; реальных запросов не было. Новый браузерный прогон Phase 2 не выполнен: автоматическая проверка разрешений отклонила запуск Chrome из-за лимита использования. HTML/API и UI-содержимое проверены тестами и HTTP.
+
+Phase 2 остановлена на review. Phase 3 не начиналась. Scoring engine и исходные 61 тест не изменены. Commit/push не выполнялись.
+
+### Исправление обрезанного ответа OpenRouter
+
+На demo-тексте воспроизведён HTTP 200 с finish_reason=length: лимит 1800 токенов обрезал JSON. Лимит увеличен до 4096, prompt требует компактный JSON и короткие непрерывные цитаты. Для invalid_response добавлены безопасные причины (truncated/json/fields/feature_shape/schema/negative_without_evidence/envelope/incomplete); в логах только code/reason, без ключа, обращения и сырого ответа. Автоматические retry/fallback не добавлены, строгая проверка evidence сохранена.
+
+Проверка после исправления: 148 tests passed. Один реальный запрос с двухстрочным примером про фонарь успешно прошёл Pydantic и exact evidence validation: category=Освещение, subtotal=50, critical_outage=unknown, итоговые score/priority=null. Это ожидаемый результат при недостатке данных, а не ошибка. Ключ прочитан только для запроса из локального .env и не выведен. Ранее записанный пропуск manual test относился к моменту, когда ключ ещё не был доступен.
+
+После изменения файлов перезапустить Uvicorn (или использовать --reload локально). Перед запуском из .env в bash выполнить set -a, source .env, set +a; приложение не загружает .env автоматически.
+
+## Phase 2 — ручное подтверждение scoring-признаков
+
+В карточке доступны safety_risk и critical_outage (yes/no/unknown), а также длительность: «Нет данных» → unknown, «Менее двух дней» → no, «Два дня и более» → yes. Начальные значения берутся из AI. Изменение автоматически отправляет обычную HTML-форму на backend; без JavaScript доступна кнопка «Пересчитать».
+
+Исходный AIAnalysis, его значения, evidence и review_reasons не изменяются. Текущие решения находятся отдельно в operator_overrides; effective_values показывает значения для расчёта. Любой изменённый признак отмечается operator override, даже если оператор затем выбрал исходное AI-значение. Замечания AI в карточке явно обозначены как исходные.
+
+Backend повторно вызывает существующий app/scoring.py, который не изменялся. Для override основание обозначено как решение оператора и не выдаётся за цитату AI. Повторных AI-вызовов нет. Unknown блокирует final score/priority и оставляет subtotal и список неизвестных признаков. Пример yes/unknown/yes → смена critical_outage на no → 50/MEDIUM; смена на yes → 80/HIGH.
+
+Карточки с исходным AI и последними overrides хранятся только в памяти одного процесса: до 256 карточек, час после создания/последней правки. После перезапуска, истечения срока или вытеснения карточки нужно снова выполнить Analyze; сообщение об этом сохраняет текст формы. Это временное состояние, не постоянная БД и не журнал изменений. Использовать один worker; SQLite, duplicate detection и deployment не добавлены.
+
+Endpoints: POST /cards/{card_id}/features для формы и PATCH /api/cards/{card_id}/features для JSON {field, value}. Клиент не может подменить исходный анализ или прислать готовый score через этот endpoint.
+
+Проверка: полный pytest — 168 passed, два прежних deprecation warnings TestClient. Chrome подтвердил автоматический пересчёт 50/MEDIUM ↔ 80/HIGH ↔ unknown, mapping длительности, сохранность AI, маркеры override и мобильную ширину. За сценарий выполнен только один Analyze. Остановлено на review, commit/push не выполнялись.

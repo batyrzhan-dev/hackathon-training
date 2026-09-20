@@ -8,10 +8,10 @@
 </head>
 <body>
   <main>
-    <header><span class="eyebrow">ГОРОДСКИЕ СЛУЖБЫ / PHASE 1</span><span class="pill">Mock analysis</span></header>
+    <header><span class="eyebrow">ГОРОДСКИЕ СЛУЖБЫ / PHASE 2</span><span class="pill">{{ "OpenRouter" if provider_name == "openrouter" else "Mock analysis" if provider_name == "mock" else "Provider не настроен" }}</span></header>
     <h1>Обращение → понятная карточка</h1>
     <p class="intro">Категория, признаки и объяснимый приоритет для оператора.</p>
-    <div class="notice">Демонстрационный режим: анализ по ограниченным текстовым шаблонам. Правила приоритета — demo rules, не нормативы городской службы.</div>
+    <div class="notice">{% if provider_name == "openrouter" %}Режим OpenRouter: текст отправляется реальному AI после нажатия Analyze. Ответ проходит проверку структуры и цитат.{% elif provider_name == "mock" %}Демонстрационный режим: анализ по ограниченным текстовым шаблонам.{% else %}Настройте AI_PROVIDER на сервере.{% endif %} Правила приоритета — demo rules, не нормативы городской службы.</div>
     <section class="panel" aria-labelledby="input-title">
       <h2 id="input-title">Новое обращение</h2>
       <nav class="examples" aria-label="Демо-примеры">
@@ -30,21 +30,45 @@
       <div class="result-header"><div><span class="eyebrow">OPERATOR CARD</span><h2 id="result-title">{{ card.analysis.category.value }}</h2></div>
         {% if card.scoring.priority %}<span class="priority {{ card.scoring.priority|lower }}">{{ card.scoring.priority }}</span>{% else %}<span class="priority">Требует проверки</span>{% endif %}
       </div>
+      <p class="muted">{% if card.analysis_provider == "openrouter" %}Анализ выполнен реальным AI · OpenRouter · {{ card.analysis_model }}{% else %}Анализ выполнен mock · без реального AI{% endif %}</p>
       <p class="summary">{{ card.analysis.summary }}</p>
-      <p class="muted">Место: {{ card.analysis.location or 'Не указано / не распознано mock' }}</p>
+      <p class="muted">Место: {{ card.analysis.location or 'Не указано / не извлечено' }}</p>
       <div class="score"><strong>{{ card.scoring.score if card.scoring.score is not none else '—' }}</strong><span>score / 100<br>LOW 0–29 · MEDIUM 30–59 · HIGH 60+</span></div>
-      {% if card.scoring.unresolved %}<p class="error">Итог не рассчитан. Подтверждённый subtotal: {{ card.scoring.subtotal }}. Неизвестные признаки: {{ card.scoring.unresolved|join(', ') }}.</p>{% endif %}
+      {% if card.scoring.unresolved %}<p class="error">Итог не рассчитан. Баллы по выявленным признакам: {{ card.scoring.subtotal }}. Неизвестные признаки: {{ card.scoring.unresolved|join(', ') }}.</p>{% endif %}
       <h3>Reasons — что добавило баллы</h3>
       {% for reason in card.scoring.reasons %}
-      <div class="reason"><div><strong>{{ reason.label }}</strong>{% for evidence in reason.evidence_or_ids %}<blockquote>{{ evidence }}</blockquote>{% endfor %}</div><b>+{{ reason.points }}</b></div>
+      <div class="reason"><div><strong>{{ reason.label }}</strong>{% for evidence in reason.evidence_or_ids %}{% if reason.rule_id in card.operator_overrides %}<p class="muted">{{ evidence }}</p>{% else %}<blockquote>{{ evidence }}</blockquote>{% endif %}{% endfor %}</div><b>+{{ reason.points }}</b></div>
       {% else %}<p>Условия начисления не выявлены.</p>{% endfor %}
-      <p class="notice">Поиск дублей отключён в Phase 1. Вклад дублей принят равным 0; это не означает, что дублей нет. Результат рассчитан только в рамках этого этапа.</p>
+      <p class="notice">Поиск дублей отключён в Phase 1–2. Вклад дублей принят равным 0; это не означает, что дублей нет. Результат рассчитан только в рамках этого этапа.</p>
+      <h3>Извлечённые признаки и evidence — проверка оператором</h3>
+      <p class="muted">Выбор автоматически пересчитывает баллы. Исходное предложение и evidence AI сохраняются отдельно. Unknown блокирует итоговый приоритет.</p>
+      {% for field, label in [('safety_risk', 'Риск безопасности'), ('critical_outage', 'Нарушение критической услуги'), ('persists_multiple_days', 'Длительность минимум два дня')] %}
+      {% set feature = card.analysis|attr(field) %}
+      <div class="feature-review">
+        <form method="post" action="/cards/{{ card.card_id }}/features" class="override-form">
+          <input type="hidden" name="field" value="{{ field }}">
+          <input type="hidden" name="text" value="{{ card.text }}">
+          <label for="override-{{ field }}">{{ label }}</label>
+          <select id="override-{{ field }}" name="value" aria-describedby="original-{{ field }}">
+            {% set options = [('unknown', 'Нет данных'), ('no', 'Менее двух дней'), ('yes', 'Два дня и более')] if field == 'persists_multiple_days' else [('yes', 'yes'), ('no', 'no'), ('unknown', 'unknown')] %}
+            {% for option, title in options %}<option value="{{ option }}" {% if card.effective_values[field] == option %}selected{% endif %}>{{ title }}</option>{% endfor %}
+          </select>
+          <noscript><button type="submit">Пересчитать</button></noscript>
+        </form>
+        {% if field in card.operator_overrides %}<p class="override-badge">operator override · {{ card.operator_overrides[field] }}</p>{% else %}<p class="muted">Используется предложение AI</p>{% endif %}
+        <p id="original-{{ field }}" class="muted">Исходное AI-значение: {{ feature.value }}. Evidence AI:</p>
+        {% for quote in feature.evidence %}<blockquote>{{ quote }}</blockquote>{% else %}<p class="muted">Цитаты не извлечены.</p>{% endfor %}
+      </div>
+      {% endfor %}
+      <details><summary>Изменения оператора</summary><pre>{{ card.operator_overrides|tojson(indent=2) }}</pre></details>
       <details><summary>Структурированный анализ</summary><pre>{{ card.analysis.model_dump(mode='json')|tojson(indent=2) }}</pre></details>
       <details><summary>Исходное обращение</summary><p class="source">{{ card.text }}</p></details>
+      {% if card.analysis.review_reasons %}<p class="muted">Исходные замечания AI (до правок оператора):</p>{% endif %}
       <ul class="muted">{% for reason in card.analysis.review_reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
     </section>
     {% endif %}
-    <footer>Без сохранения данных · Без реального AI · Оператор проверяет основания. Подтверждение дублей появится на следующем этапе.</footer>
+    <footer>Карточки и правки хранятся временно в памяти сервера · {{ "OpenRouter" if provider_name == "openrouter" else "Без реального AI" }} · Оператор проверяет основания. Подтверждение дублей появится на следующем этапе.</footer>
   </main>
+  <script src="{{ url_for('static', path='operator-review.js') }}" defer></script>
 </body>
 </html>

@@ -9,15 +9,16 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from .examples import EXAMPLES
-from .models import AnalyzeRequest, OperatorCard, OperatorChange, ScoringField, FeatureValue
-from .operator_review import review_store
+from .duplicates import find_candidates
+from .models import AnalyzeRequest, OperatorCard, OperatorChange, ScoringField, FeatureValue, DuplicateChange
+from .operator_review import review_store, recalculate_card
 from .providers import AnalysisError, get_provider, selected_provider_name
 from .scoring import calculate_priority
 
 logger = logging.getLogger(__name__)
 
 BASE = Path(__file__).resolve().parent
-app = FastAPI(title="Городской помощник · Phase 2")
+app = FastAPI(title="Городской помощник · Phase 3")
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
 templates.env.policies["json.dumps_kwargs"] = {"sort_keys": True, "ensure_ascii": False}
@@ -30,14 +31,14 @@ def build_card(payload: AnalyzeRequest) -> OperatorCard:
         analysis.validate_evidence(payload.text)
     except ValueError:
         raise AnalysisError("invalid_response") from None
-    # Detection is still disabled: preserve the explicit Phase 1 assumption.
-    scoring = calculate_priority(analysis, probable_duplicate_count=0)
+    candidates = find_candidates(payload.text, analysis)
+    scoring = calculate_priority(analysis, probable_duplicate_count=len(candidates))
     status = "mock_complete" if provider.name == "mock" else "real_complete"
-    return review_store.add(OperatorCard(
-        text=payload.text, analysis=analysis, scoring=scoring,
+    return review_store.add(recalculate_card(OperatorCard(
+        text=payload.text, analysis=analysis, scoring=scoring, candidates=candidates,
         analysis_status="needs_review" if scoring.unresolved else status,
         analysis_provider=provider.name, analysis_model=provider.model,
-    ))
+    )))
 
 
 def render(request: Request, *, text="", card=None, error=None, status_code=200):
@@ -104,3 +105,25 @@ def change_feature_api(card_id: str, change: OperatorChange):
         return review_store.update(card_id, change)
     except KeyError:
         raise HTTPException(status_code=404, detail="Карточка устарела. Выполните анализ заново.") from None
+
+
+@app.post("/cards/{card_id}/duplicates/{report_id}", response_class=HTMLResponse)
+def change_duplicate_form(request: Request, card_id: str, report_id: str,
+                          status: Annotated[str, Form()], text: Annotated[str, Form()] = ""):
+    try:
+        change = DuplicateChange(status=status)
+    except ValidationError:
+        return render(request, text=text, error="Выберите подтверждение или отклонение кандидата.", status_code=422)
+    try:
+        card = review_store.update_duplicate(card_id, report_id, change)
+    except KeyError:
+        return render(request, text=text, error="Карточка или кандидат недоступны. Выполните анализ заново.", status_code=404)
+    return render(request, text=card.text, card=card)
+
+
+@app.patch("/api/cards/{card_id}/duplicates/{report_id}", response_model=OperatorCard)
+def change_duplicate_api(card_id: str, report_id: str, change: DuplicateChange):
+    try:
+        return review_store.update_duplicate(card_id, report_id, change)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Карточка или кандидат недоступны.") from None

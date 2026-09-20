@@ -8,7 +8,7 @@
 </head>
 <body>
   <main>
-    <header><span class="eyebrow">ГОРОДСКИЕ СЛУЖБЫ / PHASE 2</span><span class="pill">{{ "OpenRouter" if provider_name == "openrouter" else "Mock analysis" if provider_name == "mock" else "Provider не настроен" }}</span></header>
+    <header><span class="eyebrow">ГОРОДСКИЕ СЛУЖБЫ / PHASE 3</span><span class="pill">{{ "OpenRouter" if provider_name == "openrouter" else "Mock analysis" if provider_name == "mock" else "Provider не настроен" }}</span></header>
     <h1>Обращение → понятная карточка</h1>
     <p class="intro">Категория, признаки и объяснимый приоритет для оператора.</p>
     <div class="notice">{% if provider_name == "openrouter" %}Режим OpenRouter: текст отправляется реальному AI после нажатия Analyze. Ответ проходит проверку структуры и цитат.{% elif provider_name == "mock" %}Демонстрационный режим: анализ по ограниченным текстовым шаблонам.{% else %}Настройте AI_PROVIDER на сервере.{% endif %} Правила приоритета — demo rules, не нормативы городской службы.</div>
@@ -39,7 +39,8 @@
       {% for reason in card.scoring.reasons %}
       <div class="reason"><div><strong>{{ reason.label }}</strong>{% for evidence in reason.evidence_or_ids %}{% if reason.rule_id in card.operator_overrides %}<p class="muted">{{ evidence }}</p>{% else %}<blockquote>{{ evidence }}</blockquote>{% endif %}{% endfor %}</div><b>+{{ reason.points }}</b></div>
       {% else %}<p>Условия начисления не выявлены.</p>{% endfor %}
-      <p class="notice">Поиск дублей отключён в Phase 1–2. Вклад дублей принят равным 0; это не означает, что дублей нет. Результат рассчитан только в рамках этого этапа.</p>
+      <p class="notice">Вклад повторов: {{ '+20 · Повторяющаяся проблема' if card.probable_duplicate_count >= 3 else '+0 · Менее трёх вероятных дублей' }}.
+      Pending и confirmed учитываются; rejected исключаются. После решения оператора число кандидатов и приоритет пересчитываются.</p>
       <h3>Извлечённые признаки и evidence — проверка оператором</h3>
       <p class="muted">Выбор автоматически пересчитывает баллы. Исходное предложение и evidence AI сохраняются отдельно. Unknown блокирует итоговый приоритет.</p>
       {% for field, label in [('safety_risk', 'Риск безопасности'), ('critical_outage', 'Нарушение критической услуги'), ('persists_multiple_days', 'Длительность минимум два дня')] %}
@@ -66,8 +67,28 @@
       {% if card.analysis.review_reasons %}<p class="muted">Исходные замечания AI (до правок оператора):</p>{% endif %}
       <ul class="muted">{% for reason in card.analysis.review_reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
     </section>
+    <section class="panel" aria-labelledby="duplicates-title">
+      <h2 id="duplicates-title">Похожие обращения</h2>
+      <p><strong>Найдено вероятных дублей: {{ card.probable_duplicate_count }}</strong></p>
+      <p class="muted">Поиск по синтетической истории из репозитория. Similarity — техническая похожесть 0–100, не вероятность. Алгоритм предлагает кандидатов; оператор подтверждает или отклоняет. Обращения не объединяются.</p>
+      {% for candidate in card.candidates %}
+      <article class="feature-review">
+        <h3>#{{ candidate.id }} · {{ candidate.category.value }}</h3>
+        <p class="muted">{{ candidate.location }}</p>
+        <p>{{ candidate.text }}</p>
+        <p><strong>Similarity: {{ candidate.similarity }}/100</strong> · текст: {{ candidate.text_similarity }}/100</p>
+        <ul>{% for reason in candidate.reasons %}<li>✓ {{ reason }}</li>{% endfor %}</ul>
+        <p>Статус: <strong>{{ candidate.status }}</strong> · {{ 'Исключён из подсчёта' if candidate.status == 'rejected' else 'Учтён как вероятный дубль' }}</p>
+        <form method="post" action="/cards/{{ card.card_id }}/duplicates/{{ candidate.id }}">
+          <input type="hidden" name="text" value="{{ card.text }}">
+          <button type="submit" name="status" value="confirmed" {% if candidate.status == 'confirmed' %}disabled{% endif %}>Подтвердить дубликат</button>
+          <button type="submit" name="status" value="rejected" {% if candidate.status == 'rejected' %}disabled{% endif %}>Отклонить</button>
+        </form>
+      </article>
+      {% else %}<p>Кандидаты не найдены по правилам демо. Это не доказывает отсутствие дублей; для сопоставления нужен распознанный адрес.</p>{% endfor %}
+    </section>
     {% endif %}
-    <footer>Карточки и правки хранятся временно в памяти сервера · {{ "OpenRouter" if provider_name == "openrouter" else "Без реального AI" }} · Оператор проверяет основания. Подтверждение дублей появится на следующем этапе.</footer>
+    <footer>Карточки и правки хранятся временно в памяти сервера · {{ "OpenRouter" if provider_name == "openrouter" else "Без реального AI" }} · Оператор проверяет основания. Кандидаты на дубликаты требуют проверки человеком.</footer>
   </main>
   <script src="{{ url_for('static', path='operator-review.js') }}" defer></script>
 </body>

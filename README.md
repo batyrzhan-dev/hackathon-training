@@ -1,6 +1,6 @@
-# Городской помощник — Phase 2: Real AI Integration
+# Городской помощник — Phase 3: кандидаты на дубликаты
 
-Локальный end-to-end прототип: текст → mock или OpenRouter → validated AIAnalysis → существующий deterministic scoring → одна карточка оператора. Phase 2 добавляет реальный AI adapter; duplicate detection, embeddings, SQLite и deployment не реализованы.
+End-to-end прототип: текст → mock или OpenRouter → validated AIAnalysis → deterministic duplicate matching → существующий scoring → карточка → решение оператора. Phase 3 добавляет кандидатов на дубликаты и confirm/reject. Embeddings, SQLite и следующие этапы не реализованы. Ранний deployment на Render работает по сообщению пользователя; текущие изменения ещё не опубликованы.
 
 ## Problem / Target users / Value
 
@@ -12,7 +12,8 @@
 - Pydantic-контракт: category, summary, location, event_time_text, ongoing, safety_risk, critical_outage, persists_multiple_days, review_reasons.
 - Признаки содержат value yes/no/unknown и evidence — точные цитаты входного текста.
 - Карточка: категория, краткое извлечение из текста, место, score, priority, reasons с баллами/цитатами и раскрываемый structured analysis.
-- Шесть синтетических примеров; явная ошибка пустого ввода; API для того же сценария.
+- Шесть синтетических примеров ввода и 12 исторических обращений; явная ошибка пустого ввода; API для того же сценария.
+- Кандидаты с technical similarity, основаниями, pending/confirmed/rejected и пересчётом +20 за 3+ неотклонённых кандидата.
 
 ## AI role / Provider architecture
 
@@ -46,9 +47,9 @@ Real AI не подменяет отсутствие сведений значе
 
 Каждый вклад начисляется один раз. 0–29 LOW; 30–59 MEDIUM; 60+ HIGH. Причины включают только сработавшие правила.
 
-**Граница Phase 1–2:** поиска дублей нет. Backend явно передаёт в engine count=0, а UI предупреждает, что вклад отключён. В API probable_duplicate_count=null (не измерен), duplicate_count_for_scoring=0, duplicate_detection_status=disabled_phase1 (сохранённое имя поля/значения API Phase 1; поиск остаётся отключённым и в Phase 2). Это не утверждение «дублей нет». Правило +20 реализовано в том же engine и проверяется unit-тестами на синтетическом count; API не принимает count от пользователя.
+**Phase 3:** backend считает уникальные ID pending/confirmed кандидатов. Rejected не участвуют. API возвращает duplicate_detection_status=complete, probable_duplicate_count и duplicate_count_for_scoring с фактическим числом найденных активных кандидатов. Клиент не может прислать собственный count/score. Reasons для +20 содержат ID кандидатов.
 
-При неизвестном scoring-признаке engine возвращает score/priority=null, subtotal известных вкладов и unresolved. Для будущего поиска неизвестный count=None также блокирует итог, а не подменяется нулём. Подсчёт уникальных кандидатов и их ID будет ответственностью будущего duplicate detection, а не mock или scoring.
+При неизвестном scoring-признаке engine возвращает score/priority=null, subtotal известных вкладов и unresolved. Поиск кандидатов не превращает unknown в no. Если AI вернул critical_outage=unknown, оператор сначала проверяет этот признак; до решения итогового HIGH/MEDIUM/LOW нет.
 
 ## Architecture / Tech stack
 
@@ -59,13 +60,17 @@ HTML form / JSON API
     → AnalyzeRequest validation
     → AnalysisProvider (mock / OpenRouter)
     → AIAnalysis + evidence validation
+    → duplicates.find_candidates (синтетическая история)
     → scoring.calculate_priority
     → OperatorCard → Jinja2 HTML / JSON
+    → confirm/reject или feature override → повторный scoring
 ```
 
 - app/models.py — контракты.
 - app/mock_ai.py — сохранённый mock; app/providers/ — общий интерфейс, factory, adapters, prompt и безопасные ошибки.
 - app/scoring.py — независимый engine всех четырёх правил.
+- app/duplicates.py и app/data/reports.json — deterministic matching и история.
+- app/operator_review.py — временные решения оператора и общий пересчёт.
 - app/main.py — общая сборка карточки для формы и API.
 - app/examples.py — синтетические тексты.
 - app/templates/index.html и app/static/style.css — UI.
@@ -118,17 +123,18 @@ set +a
 
 1. Открыть главную страницу.
 2. Выбрать «Фонарь и искрение», затем Analyze.
-3. Увидеть Освещение, score 50, MEDIUM, причины +40 за риск и +10 за длительность.
-4. Проверить исходные цитаты и structured analysis.
-5. Отправить пустое поле — получить понятную ошибку, а не карточку с LOW.
+3. Увидеть Освещение, четыре pending кандидата, score 70/HIGH: +40 риск, +10 длительность, +20 повторы.
+4. Отклонить два кандидата: остаётся два, вклад повторов +0, score 50/MEDIUM. Подтвердить одного отклонённого: снова три и 70/HIGH.
+5. Проверить исходные цитаты и structured analysis.
+6. Отправить пустое поле — получить понятную ошибку, а не карточку с LOW.
 
 | Пример | Ожидаемый результат в mock |
 |---|---|
-| Фонарь и искрение | 50 / MEDIUM |
+| Фонарь и искрение | 70 / HIGH (4 кандидата) |
 | Нет воды второй день | 40 / MEDIUM |
 | Искрение + нет воды второй день | 80 / HIGH |
 | Мусор во дворе | 0 / LOW |
-| Отрицание искрения и оголённых проводов | 0 / LOW |
+| Отрицание искрения и оголённых проводов | 20 / LOW (4 кандидата на неисправную лампу; риска нет) |
 | «Возможно провод искрит» | Требует проверки, score/priority=null |
 
 В примерах хранятся только тексты, результаты вычисляются при каждом запросе.
@@ -158,7 +164,7 @@ Phase 2: новый provider test suite использует только httpx.
 
 ## Подготовка к раннему deployment на Render
 
-Проект подготовлен для Python Web Service; сам deployment ещё не выполнен. Root Directory — корень репозитория (поле можно оставить пустым). Файл .python-version содержит 3.12; не задавайте конфликтующий PYTHON_VERSION в настройках сервиса.
+Ранний deployment Phase 2 работает по сообщению пользователя; Phase 3 в этом задании не публикуется. Настройки Python Web Service: Root Directory — корень репозитория (поле можно оставить пустым). Файл .python-version содержит 3.12; не задавайте конфликтующий PYTHON_VERSION в настройках сервиса.
 
 **Build Command**
 
@@ -186,13 +192,13 @@ PORT предоставляет Render; start command использует ег�
 
 Production dependencies уже перечислены в requirements.txt: FastAPI, Pydantic, Jinja2, Uvicorn, python-multipart, HTTPX. requirements.lock.txt используется как constraints; наличие там pytest не устанавливает его при production build. requirements-dev.txt нужен только для тестов.
 
-Для текущего временного хранилища карточек использовать один instance и один worker; если WEB_CONCURRENCY задан в environment, установить 1. Рестарт/redeploy очищает карточки и operator overrides — потребуется повторный Analyze. Постоянного хранения, duplicate detection, embeddings и SQLite пока нет.
+Для текущего временного хранилища карточек использовать один instance и один worker; если WEB_CONCURRENCY задан в environment, установить 1. Рестарт/redeploy очищает карточки и operator overrides — потребуется повторный Analyze. Постоянного хранения, embeddings и SQLite пока нет. История read-only входит в репозиторий; filesystem writes не нужны.
 
 Официальные инструкции: [Render FastAPI](https://render.com/docs/deploy-fastapi), [Python version](https://render.com/docs/python-version), [port binding](https://render.com/docs/web-services#port-binding).
 
 ## Deployment / Limitations
 
-Публичного deployment нет. Только локальный запуск, без authentication, roles, embeddings, duplicate detection, SQLite, карт и интеграций. Карточки и scoring-overrides временно хранятся в памяти одного процесса; постоянного хранения и подтверждения дублей нет. В mock режиме результаты синтетические; в openrouter режиме запрос уходит реальному AI. Проверка структуры и вхождения цитат не доказывает смысловую правильность признаков; оператор проверяет результат. Реальную точность/производительность на датасете не оценивали.
+Ранний Render deployment подтверждён пользователем; URL не предоставлен, повторная публичная проверка здесь не выполнялась. Без authentication, roles, embeddings, SQLite, карт и интеграций. Карточки, scoring overrides и решения по дубликатам временно хранятся в памяти одного процесса; постоянного хранения нет. В mock режиме результаты синтетические; в openrouter режиме запрос уходит реальному AI. Проверка структуры и вхождения цитат не доказывает смысловую правильность признаков; оператор проверяет результат. Реальную точность/производительность на датасете не оценивали.
 
 ## External materials
 
@@ -203,7 +209,7 @@ Production dependencies уже перечислены в requirements.txt: FastA
 
 ## Future development / Project documents
 
-CASE.md и PLAN.md описывают целевой MVP шире Phase 2. Следующие этапы требуют отдельного запроса: semantic duplicate detection, embeddings, подтверждение оператором, история и deployment. Текущая остановка — review после Phase 2. Commit и push не выполняются.
+CASE.md и PLAN.md отделяют текущую Phase 3 от более широкого целевого MVP. Следующие этапы требуют отдельного запроса: embeddings, постоянная история, улучшение качества и дальнейший deployment. Текущая остановка — review после Phase 3. Commit и push не выполняются.
 
 ### Исправление обрезанного ответа OpenRouter
 
@@ -213,7 +219,7 @@ CASE.md и PLAN.md описывают целевой MVP шире Phase 2. Сл�
 
 После изменения файлов перезапустить Uvicorn (или использовать --reload локально). Перед запуском из .env в bash выполнить set -a, source .env, set +a; приложение не загружает .env автоматически.
 
-## Phase 2 — ручное подтверждение scoring-признаков
+## История Phase 2 — ручное подтверждение scoring-признаков
 
 В карточке доступны safety_risk и critical_outage (yes/no/unknown), а также длительность: «Нет данных» → unknown, «Менее двух дней» → no, «Два дня и более» → yes. Начальные значения берутся из AI. Изменение автоматически отправляет обычную HTML-форму на backend; без JavaScript доступна кнопка «Пересчитать».
 
@@ -226,3 +232,27 @@ Backend повторно вызывает существующий app/scoring.p
 Endpoints: POST /cards/{card_id}/features для формы и PATCH /api/cards/{card_id}/features для JSON {field, value}. Клиент не может подменить исходный анализ или прислать готовый score через этот endpoint.
 
 Проверка: полный pytest — 168 passed, два прежних deprecation warnings TestClient. Chrome подтвердил автоматический пересчёт 50/MEDIUM ↔ 80/HIGH ↔ unknown, mapping длительности, сохранность AI, маркеры override и мобильную ширину. За сценарий выполнен только один Analyze. Остановлено на review, commit/push не выполнялись.
+
+## Phase 3 — текущая реализация и границы
+
+Разрешён и реализован только lightweight deterministic поиск кандидатов. Ранний Render deployment предыдущего этапа работает по сообщению пользователя; изменения Phase 3 ещё не опубликованы. Никаких embeddings, дополнительных LLM calls, SQLite, auth, ролей, карт и следующих этапов.
+
+Поток: validated AIAnalysis → app/duplicates.py + app/data/reports.json → кандидаты → прежний scoring engine → карточка → confirm/reject → повторный scoring. 12 синтетических исторических записей, четыре кандидата для основного сценария; история не пополняется вводом пользователя и никогда не перезаписывается. Решения оператора хранятся только в существующей памяти карточки (один процесс, TTL 1 час, максимум 256 карточек).
+
+Совпадение category (кроме «Другое») и нормализованного street/house обязательно. Регистр, пунктуация, пробелы, ул./улица и д./дом нормализуются; ограниченная нормализация окончания ой/ую → ая. Буква дома, дробь, корпус и строение различаются. Нераспознанное место не порождает кандидатов. Текст сравнивается по пересечению множеств слов с небольшим словарём формулировок неисправного освещения; text similarity = 100 × |intersection| / min(|tokens A|, |tokens B|). Для освещения дополнительно нужны признаки неисправности; починенные фонари и различие внутренней лампы/наружного освещения отсекаются.
+
+Пороги в app/duplicates.py: TEXT_SIMILARITY_THRESHOLD=50, DUPLICATE_SIMILARITY_THRESHOLD=80. Итоговый similarity = 20 за категорию + 40 за адрес + 0.4 × text similarity (0–100). Это технический demo score, не вероятность; пороги не калиброваны на реальных обращениях. Сортировка: similarity убывает, затем ID. Все уникальные найденные ID показаны и участвуют в подсчёте.
+
+Pending и confirmed учитываются; rejected сохраняется в карточке, но исключается из count и reasons. Confirm/reject идемпотентны, решение можно изменить; автоматического merge нет. При 3+ активных кандидатах добавляется +20 по существующему правилу. Unknown scoring-признак по-прежнему блокирует итог. Исходные AI features/evidence и operator overrides сохраняются при пересчёте.
+
+Demo: safety=yes, critical=no, multiple_days=yes → четыре pending → 70/HIGH. Один reject → три → 70/HIGH; второй reject → два → 50/MEDIUM. При реальном AI critical=unknown сначала оператор должен принять решение по признаку: до этого только subtotal, без финального HIGH. Подтверждение вместо reject сохраняет вклад.
+
+Ограничения: поверхностное текстовое сравнение, небольшой словарь и адресный парсер, нет геокодирования/полноценной морфологии/проверки времени события; разные объекты у одного дома могут стать кандидатами. Неизвестное место даёт пустую выдачу с объяснением, а не доказательство отсутствия дублей. Требуется человек; новые обращения и связи не сохраняются между перезапусками. Следующие разделы с cosine/embeddings/SQLite описывают прежний целевой MVP и не расширяют scope Phase 3.
+
+API решений: PATCH /api/cards/{card_id}/duplicates/{report_id} с JSON {"status":"confirmed"} или {"status":"rejected"}; HTML-форма — POST /cards/{card_id}/duplicates/{report_id}. Недоступная/истёкшая карточка или неизвестный кандидат возвращает 404; нельзя добавить произвольный исторический ID или изменить AI-данные. Отказ загрузки/валидации встроенной истории блокирует старт приложения, не выдаётся за нулевой count.
+
+Dataset создан синтетически с помощью Codex для этого этапа, без внешних данных и персональных сведений. Новых runtime dependencies нет: matcher использует стандартную библиотеку Python. Исходные проверки Phase 1–2 сохранены; ожидания отключённого поиска и demo score обновлены там, где поведение намеренно изменилось.
+
+### Проверка Phase 3
+
+Полный pytest: **211 passed**, два прежних deprecation warnings Starlette TestClient. Основной сценарий проверен через живой Uvicorn/HTTP в отдельном production-only окружении Python 3.12: HTML Analyze → четыре кандидата / 70 HIGH; два Reject → два / 50 MEDIUM; Confirm → три / 70 HIGH; unknown → subtotal 70 без итогового priority. Проверены /health, CSS и сохранение исходного текста. Runtime использовал mock; дополнительных реальных OpenRouter calls не было. Временный сервер остановлен. git diff --check пройден. Остановка на review; следующие этапы, commit, push и публикация Phase 3 не выполнялись.

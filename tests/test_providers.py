@@ -287,7 +287,7 @@ def test_openrouter_card_uses_existing_scoring_and_shows_real_label(monkeypatch)
         assert "Анализ выполнен реальным AI" in page.text
         assert "Извлечённые признаки и evidence" in page.text
         assert "Вода есть, отключений нет." in page.text
-        assert "Поиск дублей отключён" in page.text
+        assert "Похожие обращения" in page.text
 
 
 @pytest.mark.parametrize("status", [401,429,500])

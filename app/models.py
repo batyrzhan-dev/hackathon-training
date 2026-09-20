@@ -86,14 +86,33 @@ class OperatorScoringInput(Contract):
     persists_multiple_days: Feature
 
 
+class HistoricalReport(Contract):
+    id: Text
+    text: Text
+    category: Category
+    location: Text | None
+
+
+class DuplicateCandidate(HistoricalReport):
+    similarity: float = Field(ge=0, le=100)
+    text_similarity: float = Field(ge=0, le=100)
+    reasons: list[str]
+    status: Literal["pending", "confirmed", "rejected"] = "pending"
+
+
+class DuplicateChange(Contract):
+    status: Literal["confirmed", "rejected"]
+
+
 class OperatorCard(Contract):
     text: str
     analysis: AIAnalysis
     scoring: PriorityResult
     analysis_status: Literal["mock_complete", "real_complete", "needs_review"]
-    duplicate_detection_status: Literal["disabled_phase1"] = "disabled_phase1"
-    probable_duplicate_count: int | None = None
-    duplicate_count_for_scoring: Literal[0] = 0
+    duplicate_detection_status: Literal["complete"] = "complete"
+    probable_duplicate_count: int = Field(default=0, ge=0)
+    duplicate_count_for_scoring: int = Field(default=0, ge=0)
+    candidates: list[DuplicateCandidate] = Field(default_factory=list)
     analysis_provider: Literal["mock", "openrouter"] = "mock"
     analysis_model: str | None = None
 

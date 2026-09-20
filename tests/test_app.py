@@ -8,8 +8,8 @@ from app.main import app
 client = TestClient(app)
 
 
-@pytest.mark.parametrize("example,score,priority", [("lighting",50,"MEDIUM"),("water",40,"MEDIUM"),
-                                                 ("urgent",80,"HIGH"),("waste",0,"LOW"),("negation",0,"LOW")])
+@pytest.mark.parametrize("example,score,priority", [("lighting",70,"HIGH"),("water",40,"MEDIUM"),
+                                                 ("urgent",80,"HIGH"),("waste",0,"LOW"),("negation",20,"LOW")])
 def test_end_to_end(example, score, priority):
     text = next(item["text"] for item in EXAMPLES if item["id"] == example)
     response = client.post("/api/analyze", json={"text": text})
@@ -17,16 +17,16 @@ def test_end_to_end(example, score, priority):
     result = response.json()
     assert result["scoring"]["score"] == score
     assert result["scoring"]["priority"] == priority
-    assert result["duplicate_detection_status"] == "disabled_phase1"
-    assert result["probable_duplicate_count"] is None
-    assert result["duplicate_count_for_scoring"] == 0
+    assert result["duplicate_detection_status"] == "complete"
+    assert result["probable_duplicate_count"] == len(result["candidates"])
+    assert result["duplicate_count_for_scoring"] == result["probable_duplicate_count"]
     assert "score" not in result["analysis"] and "priority" not in result["analysis"]
     for field in ("safety_risk", "critical_outage", "persists_multiple_days"):
         assert all(quote in text for quote in result["analysis"][field]["evidence"])
     html = client.post("/analyze", data={"text": text})
     assert html.status_code == 200
     assert 'OPERATOR CARD' in html.text and priority in html.text
-    assert 'Поиск дублей отключён' in html.text
+    assert 'Похожие обращения' in html.text
 
 
 @pytest.mark.parametrize("text", ["", "   ", "\n\t", "a" * 5001])

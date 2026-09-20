@@ -1,10 +1,10 @@
-"""Short-lived local review state. No database, duplicate detection or AI calls."""
+"""Short-lived local review state. No database or AI calls."""
 from collections import OrderedDict
 from secrets import token_urlsafe
 from threading import Lock
 from time import monotonic
 
-from .models import Feature, OperatorCard, OperatorChange, OperatorScoringInput
+from .models import Feature, OperatorCard, OperatorChange, OperatorScoringInput, DuplicateChange
 from .scoring import calculate_priority
 
 FIELDS = ("safety_risk", "critical_outage", "persists_multiple_days")
@@ -13,6 +13,10 @@ FIELDS = ("safety_risk", "critical_outage", "persists_multiple_days")
 def apply_override(card: OperatorCard, change: OperatorChange) -> OperatorCard:
     updated = card.model_copy(deep=True)
     updated.operator_overrides[change.field] = change.value
+    return recalculate_card(updated)
+
+
+def recalculate_card(updated: OperatorCard) -> OperatorCard:
     effective = {}
     for field in FIELDS:
         if field in updated.operator_overrides:
@@ -21,7 +25,12 @@ def apply_override(card: OperatorCard, change: OperatorChange) -> OperatorCard:
             effective[field] = Feature(value=value, evidence=[f"Решение оператора (operator override): {value}"])
         else:
             effective[field] = getattr(updated.analysis, field).model_copy(deep=True)
-    updated.scoring = calculate_priority(OperatorScoringInput(**effective), probable_duplicate_count=0)
+    active_ids = sorted({candidate.id for candidate in updated.candidates if candidate.status != "rejected"})
+    updated.probable_duplicate_count = updated.duplicate_count_for_scoring = len(active_ids)
+    updated.scoring = calculate_priority(OperatorScoringInput(**effective), probable_duplicate_count=len(active_ids))
+    for reason in updated.scoring.reasons:
+        if reason.rule_id == "probable_duplicates":
+            reason.evidence_or_ids = active_ids
     updated.analysis_status = ("needs_review" if updated.scoring.unresolved else
                                "mock_complete" if updated.analysis_provider == "mock" else "real_complete")
     return updated
@@ -57,6 +66,21 @@ class ReviewStore:
             if card_id not in self._cards:
                 raise KeyError("Review card expired or missing")
             updated = apply_override(self._cards[card_id][1], change)
+            self._cards[card_id] = (monotonic() + self.ttl_seconds, updated)
+            self._cards.move_to_end(card_id)
+            return updated.model_copy(deep=True)
+
+    def update_duplicate(self, card_id: str, report_id: str, change: DuplicateChange) -> OperatorCard:
+        with self._lock:
+            self._expire()
+            if card_id not in self._cards:
+                raise KeyError("Review card expired or missing")
+            updated = self._cards[card_id][1].model_copy(deep=True)
+            candidate = next((item for item in updated.candidates if item.id == report_id), None)
+            if candidate is None:
+                raise KeyError("Candidate missing")
+            candidate.status = change.status
+            updated = recalculate_card(updated)
             self._cards[card_id] = (monotonic() + self.ttl_seconds, updated)
             self._cards.move_to_end(card_id)
             return updated.model_copy(deep=True)
